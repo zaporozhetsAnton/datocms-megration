@@ -1,4 +1,4 @@
-##DatoCMS migration script
+## DatoCMS migration script
 
 Script that migrates all fields/blocks/models from one DatoCMS environment to another.
 
@@ -8,13 +8,13 @@ This migration code only transfers blocks, models and fields that were created/u
 It can be improved, for example transferring content menu structure could be useful.
 If you have got an error during the fields migration step most of all you should take a look at the changeFieldValidators function, maybe your field has a validation rule that the current function doesn't handle.
 
-###Installation steps
+### Installation steps
 
 ``npm i -D datocms-client``
 
 Add migration.js to the root folder of your project.
 
-###Migration steps
+### Migration steps
 
 1 In DatoCMS admin panel, turn on maintenance mode.
 
