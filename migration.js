@@ -32,9 +32,37 @@ const generateValidShapeNewModelOrBlock = (model) => {
 const generateValidShapeField = async (
   field,
   devModelsAndBlocks,
-  prodModelsAndBlocks
+  prodModelsAndBlocks,
+  prodModelFieldsets,
+  prodPlugins
 ) => {
   const { id, appeareance, itemType, ...validShapeField } = field;
+  if (validShapeField.fieldset) {
+    const devFieldset = await developmentClient.fieldsets.find(
+      validShapeField.fieldset
+    );
+    for (let prodFieldset of prodModelFieldsets) {
+      if (prodFieldset.title === devFieldset.title) {
+        validShapeField.fieldset = prodFieldset.id;
+        break;
+      }
+    }
+  }
+  if (validShapeField.appearance.addons.length > 0) {
+    for (let addon of validShapeField.appearance.addons) {
+      try {
+        const devPlugin = await developmentClient.plugins.find(addon.id);
+        const prodPlugin = prodPlugins.find(
+          (prodPlugin) => prodPlugin.packageName === devPlugin.packageName
+        );
+        if (prodPlugin.id) {
+          addon.id = prodPlugin.id;
+        }
+      } catch (e) {
+        console.warn('developmentClient.plugins.find section error', e);
+      }
+    }
+  }
   await changeFieldValidators(
     validShapeField.validators,
     devModelsAndBlocks,
@@ -90,11 +118,11 @@ const sortModels = (modelA, modelB) => {
   return modelA.modularBlock === modelB.modularBlock
     ? 0
     : modelA.modularBlock
-      ? -1
-      : 1;
+    ? -1
+    : 1;
 };
 
-const sortFields = (a, b) => a.position - b.position;
+const sortFieldsByPosition = (a, b) => a.position - b.position;
 
 const migrateBlocksAndModels = async (
   modelsAndBlocksToCreate,
@@ -135,6 +163,10 @@ const migrateFields = async (devModelsAndBlocks) => {
       const modelApiKey = devModelsAndBlocks[i].apiKey;
       const devFields = await developmentClient.fields.all(modelApiKey);
       const prodFields = await productionClient.fields.all(modelApiKey);
+      const prodModelFieldsets = await productionClient.fieldsets.all(
+        modelApiKey
+      );
+      const prodPlugins = await productionClient.plugins.all();
       const fieldsToCreate = [];
       const fieldsToUpdate = [];
       const fieldsToDelete = [];
@@ -158,13 +190,15 @@ const migrateFields = async (devModelsAndBlocks) => {
           fieldsToDelete.push(prodField);
         }
       });
-      fieldsToCreate.sort(sortFields);
-      fieldsToUpdate.sort(sortFields);
+      fieldsToCreate.sort(sortFieldsByPosition);
+      fieldsToUpdate.sort(sortFieldsByPosition);
       for (let i = 0; i < fieldsToCreate.length; i++) {
         const newField = await generateValidShapeField(
           fieldsToCreate[i],
           devModelsAndBlocks,
-          prodModelsAndBlocks
+          prodModelsAndBlocks,
+          prodModelFieldsets,
+          prodPlugins
         );
         await productionClient.fields.create(modelApiKey, newField);
         console.log(
@@ -175,7 +209,9 @@ const migrateFields = async (devModelsAndBlocks) => {
         const newField = await generateValidShapeField(
           fieldsToUpdate[i],
           devModelsAndBlocks,
-          prodModelsAndBlocks
+          prodModelsAndBlocks,
+          prodModelFieldsets,
+          prodPlugins
         );
         await productionClient.fields.update(fieldsToUpdate[i].id, newField);
         console.log(
@@ -192,6 +228,95 @@ const migrateFields = async (devModelsAndBlocks) => {
     console.log('fields migration is finished');
   } catch (e) {
     console.warn('migrateFields error', e);
+  }
+};
+
+const migrateFieldsets = async (devModelsAndBlocks) => {
+  try {
+    for (let devModel of devModelsAndBlocks) {
+      const modelApiKey = devModel.apiKey;
+      const devFieldsets = await developmentClient.fieldsets.all(modelApiKey);
+      const prodFieldsets = await productionClient.fieldsets.all(modelApiKey);
+      const fieldsetsToCreate = [];
+      const fieldsetsToUpdate = [];
+      const fieldsetsToDelete = [];
+      devFieldsets.forEach((devFieldset) => {
+        const existingProdField = prodFieldsets.find(
+          (prodFieldset) => prodFieldset.title === devFieldset.title
+        );
+        const { id, itemType, ...validFieldset } = devFieldset;
+        if (existingProdField) {
+          fieldsetsToUpdate.push({
+            id: existingProdField.id,
+            ...validFieldset,
+          });
+        } else {
+          fieldsetsToCreate.push(validFieldset);
+        }
+      });
+      prodFieldsets.forEach((prodFieldset) => {
+        if (
+          !devFieldsets.some(
+            (devFieldset) => devFieldset.title === prodFieldset.title
+          )
+        ) {
+          fieldsetsToDelete.push(prodFieldset.id);
+        }
+      });
+      for (let fieldsetToCreate of fieldsetsToCreate) {
+        await productionClient.fieldsets.create(modelApiKey, fieldsetToCreate);
+        console.log(
+          `fieldset ${fieldsetToCreate.title} of ${modelApiKey} model is created`
+        );
+      }
+      for (let fieldsetToUpdate of fieldsetsToUpdate) {
+        const { id, ...validFieldset } = fieldsetToUpdate;
+        await productionClient.fieldsets.update(id, validFieldset);
+        console.log(
+          `fieldset ${fieldsetToUpdate.title} of ${modelApiKey} model is updated`
+        );
+      }
+      for (let fieldsetToDeleteId of fieldsetsToDelete) {
+        await productionClient.fieldsets.destroy(fieldsetToDeleteId);
+        console.log(
+          `fieldset ${fieldsetToDeleteId} of ${modelApiKey} model is deleted`
+        );
+      }
+    }
+    console.log('fieldsets migration is finished');
+  } catch (e) {
+    console.warn('migrateFieldsets error', e);
+  }
+};
+
+const migratePlugins = async () => {
+  try {
+    const devPlugins = await developmentClient.plugins.all();
+    const prodPlugins = await productionClient.plugins.all();
+    for (let devPlugin of devPlugins) {
+      if (
+        !prodPlugins.some(
+          (prodPlugin) => prodPlugin.packageName === devPlugin.packageName
+        )
+      ) {
+        const { id, ...validNewPlugin } = devPlugin;
+        await productionClient.plugins.create(validNewPlugin);
+        console.log(`plugin ${validNewPlugin.packageName} is created`);
+      }
+    }
+    for (let prodPlugin of prodPlugins) {
+      if (
+        !devPlugins.some(
+          (devPlugin) => devPlugin.packageName === prodPlugin.packageName
+        )
+      ) {
+        await productionClient.plugins.destroy(prodPlugin.id);
+        console.log(`plugin ${prodPlugin.packageName} is deleted`);
+      }
+    }
+    console.log('plugins migration is finished');
+  } catch (e) {
+    console.warn('migratePlugins error', e);
   }
 };
 
@@ -221,14 +346,16 @@ const migration = async () => {
         modelsAndBlocksToDelete.push(model);
       }
     });
+    await migratePlugins();
     await migrateBlocksAndModels(
       modelsAndBlocksToCreate,
       modelsAndBlocksToUpdate,
       modelsAndBlocksToDelete
     );
+    await migrateFieldsets(devModelsAndBlocks);
     await migrateFields(devModelsAndBlocks);
   } catch (e) {
-    console.log('migrateDevModelsAndBlocksToProduction error ', e);
+    console.warn('migration error ', e);
   }
 };
 
